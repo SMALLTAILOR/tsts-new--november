@@ -33,11 +33,17 @@ interface InventoryItem {
     sizes: Record<string, number>; // e.g. { S: 10, M: 20, L: 5 }
 }
 
-// --- REAL API (connects to a backend on Google Cloud) ---
-// Corrected the typo in the URL from "novemeber" to "november"
-const BASE_URL = 'https://tsts-new--november-725216105313.asia-south1.run.app.api';
+// --- INSTRUCTIONS FOR LIVE API ---
+// To connect to your live Google Cloud backend, do the following:
+// 1. **VERIFY YOUR URL:** Make sure your backend service is running and the URL is 100% correct.
+// 2. **CHECK CORS:** Ensure your backend is configured to accept requests from this application's domain.
+// 3. **UNCOMMENT THE `api` OBJECT:** Delete or comment out the `const api = mockApi;` line below.
+// 4. **UNCOMMENT THE `realApi` OBJECT:** Uncomment the entire `const realApi = { ... };` block.
 
-const api = {
+/*
+const BASE_URL = 'https://tsts-new-november-725216105313.asia-south1.run.app/api';
+
+const realApi = {
   getUsers: async (): Promise<User[]> => {
     const response = await fetch(`${BASE_URL}/users`);
     if (!response.ok) throw new Error('Failed to fetch users');
@@ -78,6 +84,64 @@ const api = {
      return response.json();
   }
 };
+*/
+
+// --- MOCK API (FOR DEMONSTRATION) ---
+let mockUsers: User[] = [
+    { id: 'user-1', name: 'Admin User', role: 'admin', jobProfile: 'Manager', salaryType: 'monthly', salaryAmount: 50000, status: 'active', imageUrl: 'https://i.pravatar.cc/150?u=admin' },
+    { id: 'user-2', name: 'Sunita Sharma', role: 'employee', jobProfile: 'Cutter', salaryType: 'daily', salaryAmount: 800, status: 'active', imageUrl: 'https://i.pravatar.cc/150?u=sunita' },
+    { id: 'user-3', name: 'Ramesh Kumar', role: 'employee', jobProfile: 'Stitcher', salaryType: 'piece_rate', salaryAmount: 15, status: 'active', imageUrl: 'https://i.pravatar.cc/150?u=ramesh' },
+    { id: 'user-4', name: 'Geeta Devi', role: 'employee', jobProfile: 'Stitcher', salaryType: 'piece_rate', salaryAmount: 15, status: 'terminated', imageUrl: 'https://i.pravatar.cc/150?u=geeta' }
+];
+
+let mockAttendance: Attendance[] = [
+    { id: 'att-1', userId: 'user-2', date: '2024-07-28', timestamp: '2024-07-28T09:05:12Z', status: 'approved' },
+    { id: 'att-2', userId: 'user-3', date: '2024-07-28', timestamp: '2024-07-28T09:10:24Z', status: 'pending' }
+];
+
+let mockInventory: InventoryItem[] = [
+    { id: 'TN-001', name: 'Men\'s Formal Shirt', color: 'White', sizes: { S: 10, M: 25, L: 15, XL: 5 } },
+    { id: 'TN-002', name: 'Ladies Kurti', color: 'Blue', sizes: { M: 30, L: 20 } },
+];
+
+const mockApi = {
+    getUsers: (): Promise<User[]> => new Promise(resolve => setTimeout(() => resolve(mockUsers), 500)),
+    getAttendance: (): Promise<Attendance[]> => new Promise(resolve => setTimeout(() => resolve(mockAttendance), 500)),
+    getInventory: (): Promise<InventoryItem[]> => new Promise(resolve => setTimeout(() => resolve(mockInventory), 500)),
+    markAttendance: (userId: string): Promise<Attendance> => new Promise(resolve => {
+        setTimeout(() => {
+            const today = new Date().toISOString().split('T')[0];
+            const alreadyMarked = mockAttendance.some(a => a.userId === userId && a.date === today);
+            if(alreadyMarked) {
+                // In a real API this would be a proper rejection. Here we just don't add it.
+                // For simplicity, we assume frontend logic prevents this.
+            }
+            const newRecord: Attendance = {
+                id: `att-${Date.now()}`,
+                userId,
+                date: today,
+                timestamp: new Date().toISOString(),
+                status: 'pending'
+            };
+            mockAttendance.push(newRecord);
+            resolve(newRecord);
+        }, 500);
+    }),
+    updateAttendanceStatus: (attId: string, status: AttendanceStatus): Promise<Attendance> => new Promise((resolve, reject) => {
+        setTimeout(() => {
+            const record = mockAttendance.find(a => a.id === attId);
+            if (record) {
+                record.status = status;
+                resolve({ ...record });
+            } else {
+                reject(new Error('Record not found'));
+            }
+        }, 500);
+    })
+};
+
+// --- SWITCH BETWEEN REAL AND MOCK API HERE ---
+const api = mockApi; // Currently using MOCK API. To go live, change this to `const api = realApi;` and uncomment `realApi`.
 
 
 // --- APP CONTEXT ---
@@ -131,7 +195,6 @@ const AppProvider = ({ children }: AppProviderProps) => {
     } catch (err) {
         console.error("Failed to fetch initial data:", err);
         let errorMessage = "An unexpected error occurred. Please try again.";
-        // This is the key check for a CORS or network error.
         if (err instanceof TypeError && err.message === 'Failed to fetch') {
             errorMessage = "Could not connect to the Google Cloud service. This is often caused by a CORS policy issue on the backend or a network connectivity problem. Please check the browser's developer console for more details and ensure the service is configured to accept requests from this origin.";
         } else if (err instanceof Error) {
@@ -187,7 +250,7 @@ const App = () => {
   const { loggedInUser, loading, error, refetchInitialData } = useAppContext();
 
   if (loading) {
-    return <LoadingScreen message="Connecting to Google Cloud Services..." />;
+    return <LoadingScreen message="Loading Application Data..." />;
   }
 
   if (error) {
@@ -224,7 +287,7 @@ const LoginScreen = () => {
 
     useEffect(() => {
         if(users.length > 0) {
-            setSelectedUserId(users[0].id)
+            setSelectedUserId(users.find(u => u.status === 'active')?.id || '')
         }
     }, [users])
 
@@ -256,7 +319,7 @@ const LoginScreen = () => {
                 <div className="form-group">
                     <label htmlFor="user-select">Select User to Login</label>
                     <select id="user-select" value={selectedUserId} onChange={e => setSelectedUserId(e.target.value)}>
-                        {users.map(user => (
+                        {users.filter(u => u.status === 'active').map(user => (
                             <option key={user.id} value={user.id}>{user.name} ({user.role})</option>
                         ))}
                     </select>
@@ -333,7 +396,7 @@ const Sidebar = ({ currentPage, setPage }: { currentPage: string, setPage: (page
             <div className="sidebar-footer">
                 <div className="storage-status">
                     <span className="status-indicator"></span>
-                    Storage: Google Cloud
+                    Storage: {api === mockApi ? 'Offline Demo' : 'Google Cloud'}
                 </div>
             </div>
         </aside>
@@ -346,13 +409,15 @@ const Dashboard = () => {
     return (
         <div className="card">
             <h3>Welcome to your Dashboard!</h3>
-            <p>This is where you'll see a summary of your business activities. More widgets and stats coming soon!</p>
+             {api === mockApi && (
+                <div style={{ padding: '15px', backgroundColor: 'var(--warning-color)', color: '#333', borderRadius: 'var(--border-radius)', marginTop: '20px', border: '1px solid #ffc107' }}>
+                    <strong>Offline Demo Mode:</strong> This app is currently running with mock data. Your changes will not be saved permanently. To connect to your live backend, please follow the instructions in the `index.tsx` file.
+                </div>
+            )}
+            <p style={{ marginTop: '20px' }}>This is where you'll see a summary of your business activities. More widgets and stats coming soon!</p>
             {loggedInUser!.role === 'employee' && (
                 <p>You can mark your attendance and log your work using the sidebar navigation.</p>
             )}
-             <p style={{marginTop: '20px', fontSize: '14px', color: '#6c757d'}}>
-                <strong>Note:</strong> Your application is ready to connect to a live Google Cloud backend. Please provide the backend URL to enable data persistence.
-            </p>
         </div>
     );
 };
@@ -427,6 +492,9 @@ const AttendanceManagement = () => {
         );
     }
 
+    // Admin view
+    const sortedAttendance = [...attendance].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
     return (
         <div className="card">
             <div className="card-header">
@@ -444,7 +512,7 @@ const AttendanceManagement = () => {
                     </tr>
                 </thead>
                 <tbody>
-                    {attendance.map(att => (
+                    {sortedAttendance.map(att => (
                         <tr key={att.id}>
                             <td>{getUserName(att.userId)}</td>
                             <td>{att.date}</td>
