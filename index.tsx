@@ -35,7 +35,7 @@ interface InventoryItem {
 
 // --- REAL API (connects to a backend on Google Cloud) ---
 // Corrected the typo in the URL from "novemeber" to "november"
-const BASE_URL = 'https://november-tst-725216105313.us-west1.run.app/api';
+const BASE_URL = 'https://tsts-new--november-725216105313.asia-south1.run.app.api';
 
 const api = {
   getUsers: async (): Promise<User[]> => {
