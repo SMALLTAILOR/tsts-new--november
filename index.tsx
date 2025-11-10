@@ -1,4 +1,4 @@
-import React, { useState, useContext, createContext, useMemo } from 'react';
+import React, { useState, useContext, createContext, useMemo, useEffect, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 
 // --- DATA TYPES ---
@@ -33,39 +33,150 @@ interface InventoryItem {
     sizes: Record<string, number>; // e.g. { S: 10, M: 20, L: 5 }
 }
 
-// --- MOCK DATA ---
-const initialUsers: User[] = [
-  { id: 'admin', name: 'Admin', role: 'admin', jobProfile: 'Manager', salaryType: 'monthly', salaryAmount: 50000, status: 'active' },
-  { id: 'emp-1', name: 'John Doe', role: 'employee', jobProfile: 'Cutter', salaryType: 'daily', salaryAmount: 1000, status: 'active', imageUrl: 'https://i.pravatar.cc/150?u=emp-1' },
-  { id: 'emp-2', name: 'Jane Smith', role: 'employee', jobProfile: 'Sewer', salaryType: 'piece_rate', salaryAmount: 15, status: 'active', imageUrl: 'https://i.pravatar.cc/150?u=emp-2' },
-  { id: 'emp-3', name: 'Peter Jones', role: 'employee', jobProfile: 'Sewer', salaryType: 'monthly', salaryAmount: 25000, status: 'terminated', imageUrl: 'https://i.pravatar.cc/150?u=emp-3' },
-];
+// --- REAL API (connects to a backend on Google Cloud) ---
+// Corrected the typo in the URL from "novemeber" to "november"
+const BASE_URL = 'https://november-tst-725216105313.us-west1.run.app/api';
 
-const initialAttendance: Attendance[] = [
-    { id: 'att-1', userId: 'emp-1', date: new Date().toISOString().split('T')[0], timestamp: new Date().toISOString(), status: 'pending' }
-];
-
-const initialInventory: InventoryItem[] = [
-    { id: 'TRK-001', name: 'T-Shirt', color: 'Blue', sizes: { 'S': 50, 'M': 100, 'L': 75 } },
-    { id: 'TRK-002', name: 'Jeans', color: 'Black', sizes: { '30': 40, '32': 80, '34': 60 } },
-];
+const api = {
+  getUsers: async (): Promise<User[]> => {
+    const response = await fetch(`${BASE_URL}/users`);
+    if (!response.ok) throw new Error('Failed to fetch users');
+    return response.json();
+  },
+  getAttendance: async (): Promise<Attendance[]> => {
+    const response = await fetch(`${BASE_URL}/attendance`);
+    if (!response.ok) throw new Error('Failed to fetch attendance');
+    return response.json();
+  },
+  getInventory: async (): Promise<InventoryItem[]> => {
+    const response = await fetch(`${BASE_URL}/inventory`);
+    if (!response.ok) throw new Error('Failed to fetch inventory');
+    return response.json();
+  },
+  markAttendance: async (userId: string): Promise<Attendance> => {
+    const response = await fetch(`${BASE_URL}/attendance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to mark attendance.');
+    }
+    return response.json();
+  },
+  updateAttendanceStatus: async (attId: string, status: AttendanceStatus): Promise<Attendance> => {
+     const response = await fetch(`${BASE_URL}/attendance/${attId}`, {
+         method: 'PUT',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ status })
+     });
+     if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to update status.');
+     }
+     return response.json();
+  }
+};
 
 
 // --- APP CONTEXT ---
-const AppContext = createContext(null);
+interface AppContextValue {
+  users: User[];
+  attendance: Attendance[];
+  inventory: InventoryItem[];
+  loggedInUser: User | null;
+  setLoggedInUser: React.Dispatch<React.SetStateAction<User | null>>;
+  loading: boolean;
+  error: string | null;
+  markAttendance: (user: User) => Promise<void>;
+  updateAttendanceStatus: (attId: string, newStatus: AttendanceStatus) => Promise<void>;
+  refetchInitialData: () => Promise<void>;
+}
 
-// Fix: Add type for children prop to resolve TypeScript error.
-const AppProvider = ({ children }: { children: React.ReactNode }) => {
-  const [users, setUsers] = useState<User[]>(initialUsers);
-  const [attendance, setAttendance] = useState<Attendance[]>(initialAttendance);
-  const [inventory, setInventory] = useState<InventoryItem[]>(initialInventory);
+const AppContext = createContext<AppContextValue | null>(null);
+
+const useAppContext = () => {
+    const context = useContext(AppContext);
+    if (!context) {
+        throw new Error('useAppContext must be used within an AppProvider');
+    }
+    return context;
+};
+
+interface AppProviderProps {
+  children: React.ReactNode;
+}
+
+const AppProvider = ({ children }: AppProviderProps) => {
+  const [users, setUsers] = useState<User[]>([]);
+  const [attendance, setAttendance] = useState<Attendance[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loggedInUser, setLoggedInUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  const refetchInitialData = useCallback(async () => {
+    try {
+        setLoading(true);
+        setError(null);
+        const [usersData, attendanceData, inventoryData] = await Promise.all([
+            api.getUsers(),
+            api.getAttendance(),
+            api.getInventory()
+        ]);
+        setUsers(usersData);
+        setAttendance(attendanceData);
+        setInventory(inventoryData);
+    } catch (err) {
+        console.error("Failed to fetch initial data:", err);
+        let errorMessage = "An unexpected error occurred. Please try again.";
+        // This is the key check for a CORS or network error.
+        if (err instanceof TypeError && err.message === 'Failed to fetch') {
+            errorMessage = "Could not connect to the Google Cloud service. This is often caused by a CORS policy issue on the backend or a network connectivity problem. Please check the browser's developer console for more details and ensure the service is configured to accept requests from this origin.";
+        } else if (err instanceof Error) {
+            errorMessage = `Failed to connect: ${err.message}`;
+        }
+        setError(errorMessage);
+    } finally {
+        setLoading(false);
+    }
+  }, []);
 
-  const value = {
-    users, setUsers,
-    attendance, setAttendance,
-    inventory, setInventory,
-    loggedInUser, setLoggedInUser
+  useEffect(() => {
+    refetchInitialData();
+  }, [refetchInitialData]);
+
+  const markAttendance = async (user: User) => {
+      try {
+          const newRecord = await api.markAttendance(user.id);
+          setAttendance(prev => [...prev, newRecord]);
+          alert('Attendance marked successfully! Awaiting admin approval.');
+      } catch (err) {
+          alert((err as Error).message);
+      }
+  };
+  
+  const updateAttendanceStatus = async (attId: string, newStatus: AttendanceStatus) => {
+      try {
+        const updatedRecord = await api.updateAttendanceStatus(attId, newStatus);
+        setAttendance(prev => prev.map(att => att.id === attId ? updatedRecord : att));
+      } catch(err) {
+        alert((err as Error).message);
+      }
+  };
+
+
+  const value: AppContextValue = {
+    users,
+    attendance,
+    inventory,
+    loggedInUser, setLoggedInUser,
+    loading,
+    error,
+    markAttendance,
+    updateAttendanceStatus,
+    refetchInitialData
   };
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
@@ -73,7 +184,15 @@ const AppProvider = ({ children }: { children: React.ReactNode }) => {
 
 // --- MAIN APP ---
 const App = () => {
-  const { loggedInUser, setLoggedInUser } = useContext(AppContext);
+  const { loggedInUser, loading, error, refetchInitialData } = useAppContext();
+
+  if (loading) {
+    return <LoadingScreen message="Connecting to Google Cloud Services..." />;
+  }
+
+  if (error) {
+    return <ErrorScreen message={error} onRetry={refetchInitialData} />;
+  }
 
   if (!loggedInUser) {
     return <LoginScreen />;
@@ -82,10 +201,32 @@ const App = () => {
   return <MainLayout />;
 };
 
+const LoadingScreen = ({ message }: { message: string }) => (
+    <div className="loading-container">
+        <div className="spinner"></div>
+        <p>{message}</p>
+    </div>
+);
+
+const ErrorScreen = ({ message, onRetry }: { message: string, onRetry: () => void }) => (
+    <div className="loading-container">
+        <h3 style={{color: 'var(--danger-color)'}}>Connection Error</h3>
+        <p style={{textAlign: 'center', maxWidth: '500px', padding: '0 20px'}}>{message}</p>
+        <button onClick={onRetry} className="btn-primary" style={{marginTop: '20px'}}>Retry Connection</button>
+    </div>
+);
+
+
 // --- LOGIN SCREEN ---
 const LoginScreen = () => {
-    const { users, setLoggedInUser } = useContext(AppContext);
-    const [selectedUserId, setSelectedUserId] = useState(users[0].id);
+    const { users, setLoggedInUser } = useAppContext();
+    const [selectedUserId, setSelectedUserId] = useState('');
+
+    useEffect(() => {
+        if(users.length > 0) {
+            setSelectedUserId(users[0].id)
+        }
+    }, [users])
 
     const handleLogin = () => {
         const user = users.find(u => u.id === selectedUserId);
@@ -95,6 +236,17 @@ const LoginScreen = () => {
             alert('This user is terminated or does not exist.');
         }
     };
+    
+    if (!users || users.length === 0) {
+        return (
+            <div className="login-container">
+                <div className="login-box">
+                    <h1>The Small Tailor</h1>
+                    <p>No users could be loaded from the server.</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="login-container">
@@ -117,7 +269,7 @@ const LoginScreen = () => {
 
 // --- LAYOUT ---
 const MainLayout = () => {
-    const { loggedInUser, setLoggedInUser } = useContext(AppContext);
+    const { loggedInUser, setLoggedInUser } = useAppContext();
     const [page, setPage] = useState('dashboard');
 
     const PAGES = {
@@ -139,7 +291,7 @@ const MainLayout = () => {
                 <header className="main-header">
                     <h1>{PAGES[page].title}</h1>
                     <div className="user-info">
-                        <span>Welcome, {loggedInUser.name}</span>
+                        <span>Welcome, {loggedInUser!.name}</span>
                         <button onClick={handleLogout} className="btn-secondary">Logout</button>
                     </div>
                 </header>
@@ -151,14 +303,14 @@ const MainLayout = () => {
     );
 };
 
-const Sidebar = ({ currentPage, setPage }) => {
-    const { loggedInUser } = useContext(AppContext);
+const Sidebar = ({ currentPage, setPage }: { currentPage: string, setPage: (page: string) => void }) => {
+    const { loggedInUser } = useAppContext();
     
     const navItems = [
         { id: 'dashboard', label: 'Dashboard' },
-        ...(loggedInUser.role === 'admin' ? [{ id: 'employees', label: 'Employees' }] : []),
+        ...(loggedInUser!.role === 'admin' ? [{ id: 'employees', label: 'Employees' }] : []),
         { id: 'attendance', label: 'Attendance' },
-        ...(loggedInUser.role === 'admin' ? [{ id: 'inventory', label: 'Inventory' }] : []),
+        ...(loggedInUser!.role === 'admin' ? [{ id: 'inventory', label: 'Inventory' }] : []),
         { id: 'wip', label: 'Work In Progress' },
     ];
 
@@ -178,26 +330,35 @@ const Sidebar = ({ currentPage, setPage }) => {
                     ))}
                 </ul>
             </nav>
+            <div className="sidebar-footer">
+                <div className="storage-status">
+                    <span className="status-indicator"></span>
+                    Storage: Google Cloud
+                </div>
+            </div>
         </aside>
     );
 };
 
 // --- PAGES ---
 const Dashboard = () => {
-    const { loggedInUser } = useContext(AppContext);
+    const { loggedInUser } = useAppContext();
     return (
         <div className="card">
             <h3>Welcome to your Dashboard!</h3>
             <p>This is where you'll see a summary of your business activities. More widgets and stats coming soon!</p>
-            {loggedInUser.role === 'employee' && (
+            {loggedInUser!.role === 'employee' && (
                 <p>You can mark your attendance and log your work using the sidebar navigation.</p>
             )}
+             <p style={{marginTop: '20px', fontSize: '14px', color: '#6c757d'}}>
+                <strong>Note:</strong> Your application is ready to connect to a live Google Cloud backend. Please provide the backend URL to enable data persistence.
+            </p>
         </div>
     );
 };
 
 const EmployeeManagement = () => {
-    const { users } = useContext(AppContext);
+    const { users } = useAppContext();
     // Add/Edit functionality would be implemented here with forms and modals
     return (
         <div className="card">
@@ -246,34 +407,13 @@ const EmployeeManagement = () => {
 };
 
 const AttendanceManagement = () => {
-    const { loggedInUser, attendance, users, setAttendance } = useContext(AppContext);
+    const { loggedInUser, attendance, users, markAttendance, updateAttendanceStatus } = useAppContext();
     const today = new Date().toISOString().split('T')[0];
-
-    const handleMarkPresent = () => {
-        const alreadyMarked = attendance.some(a => a.userId === loggedInUser.id && a.date === today);
-        if (alreadyMarked) {
-            alert('You have already marked your attendance for today.');
-            return;
-        }
-        const newRecord: Attendance = {
-            id: `att-${Date.now()}`,
-            userId: loggedInUser.id,
-            date: today,
-            timestamp: new Date().toISOString(),
-            status: 'pending'
-        };
-        setAttendance(prev => [...prev, newRecord]);
-        alert('Attendance marked successfully! Awaiting admin approval.');
-    };
-
-    const handleApproval = (attId: string, newStatus: AttendanceStatus) => {
-        setAttendance(prev => prev.map(att => att.id === attId ? {...att, status: newStatus} : att));
-    };
 
     const getUserName = (userId: string) => users.find(u => u.id === userId)?.name || 'Unknown';
 
-    if (loggedInUser.role === 'employee') {
-        const myAttendanceToday = attendance.find(a => a.userId === loggedInUser.id && a.date === today);
+    if (loggedInUser!.role === 'employee') {
+        const myAttendanceToday = attendance.find(a => a.userId === loggedInUser!.id && a.date === today);
         return (
             <div className="card">
                 <h3>Mark Today's Attendance</h3>
@@ -281,7 +421,7 @@ const AttendanceManagement = () => {
                 {myAttendanceToday ? (
                      <p>Your attendance for today is marked. Status: <span className={`tag tag-${myAttendanceToday.status}`}>{myAttendanceToday.status}</span></p>
                 ) : (
-                    <button className="btn-primary" onClick={handleMarkPresent}>Mark Me Present</button>
+                    <button className="btn-primary" onClick={() => markAttendance(loggedInUser!)}>Mark Me Present</button>
                 )}
             </div>
         );
@@ -313,8 +453,8 @@ const AttendanceManagement = () => {
                             <td className="actions">
                                 {att.status === 'pending' && (
                                     <>
-                                        <button className="btn-success" onClick={() => handleApproval(att.id, 'approved')}>Approve</button>
-                                        <button className="btn-danger" onClick={() => handleApproval(att.id, 'rejected')}>Reject</button>
+                                        <button className="btn-success" onClick={() => updateAttendanceStatus(att.id, 'approved')}>Approve</button>
+                                        <button className="btn-danger" onClick={() => updateAttendanceStatus(att.id, 'rejected')}>Reject</button>
                                     </>
                                 )}
                             </td>
@@ -327,7 +467,7 @@ const AttendanceManagement = () => {
 };
 
 const InventoryManagement = () => {
-    const { inventory } = useContext(AppContext);
+    const { inventory } = useAppContext();
 
     return (
         <div className="card">
@@ -365,9 +505,9 @@ const InventoryManagement = () => {
 };
 
 const WIP = () => {
-    const { loggedInUser } = useContext(AppContext);
+    const { loggedInUser } = useAppContext();
     
-    if (loggedInUser.role === 'admin') {
+    if (loggedInUser!.role === 'admin') {
         return (
             <div className="card">
                 <h3>Work In Progress - Admin View</h3>
@@ -387,7 +527,7 @@ const WIP = () => {
     );
 };
 
-const root = createRoot(document.getElementById('root'));
+const root = createRoot(document.getElementById('root')!);
 root.render(
   <React.StrictMode>
     <AppProvider>
